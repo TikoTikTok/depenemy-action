@@ -1,64 +1,70 @@
-name: "depenemy — npm Supply Chain Scanner"
+name: depenemy Supply Chain Scanner
 description: >
-  Scans npm lockfiles and package.json for supply chain attacks:
-  registry hijacking, scope confusion, lockfile injection, semver abuse,
-  and more. Integrates as a PR check with BLOCK/ALERT/PASS findings.
-author: "depenemy"
+  Scans npm dependencies for supply chain risks — bad registries, lockfile injection,
+  unsafe version specifiers, typosquatting, malicious packages, and behavioral red flags.
+  Powered by the depenemy engine. Outputs SARIF for GitHub Code Scanning.
+author: depenemy contributors
 
 branding:
   icon: shield
   color: red
 
 inputs:
-  lockfile:
-    description: "Path to package-lock.json"
-    required: false
-    default: "package-lock.json"
-
-  manifest:
-    description: "Path to package.json (for semver-lint)"
-    required: false
-    default: "package.json"
-
   approved-registries:
     description: >
-      JSON array of approved registry hostnames.
-      Example: '["registry.npmjs.org"]'
+      Comma-separated list of approved registry hostnames.
+      Packages resolved from any other host trigger a BLOCK finding (B006).
     required: false
-    default: '["registry.npmjs.org"]'
+    default: "registry.npmjs.org"
 
-  internal-scopes:
+  fail-on:
     description: >
-      JSON array of internal npm scopes that must NOT resolve from public registries.
-      Example: '["@myorg", "@myorg-internal"]'
+      Minimum finding severity that causes the action to exit non-zero.
+      One of: error | warning | info | never
     required: false
-    default: "[]"
+    default: "error"
+
+  paths:
+    description: >
+      Space-separated paths to scan. Defaults to the repository root.
+    required: false
+    default: "."
+
+  config:
+    description: >
+      Path to a .depenemy.yml configuration file. When provided, overrides
+      the auto-generated config (approved-registries input is ignored).
+    required: false
+    default: ""
+
+  token:
+    description: >
+      GitHub token used for author/publisher reputation lookups.
+    required: false
+    default: ${{ github.token }}
 
   no-fail:
-    description: "Set to 'true' to always exit 0 (report-only mode, never blocks PR)"
+    description: >
+      Deprecated — use fail-on: never instead.
+      When true, the action always exits 0 regardless of findings.
     required: false
     default: "false"
 
-  semver-lint:
-    description: "Set to 'false' to skip semver-lint check"
-    required: false
-    default: "true"
-
 outputs:
-  blocks:
-    description: "Number of BLOCK-level findings"
-  alerts:
-    description: "Number of ALERT-level findings"
-  result:
-    description: "Overall result: PASS | ALERT | BLOCK"
+  findings-count:
+    description: "Total number of findings across all severity levels."
+  errors-count:
+    description: "Number of error-severity findings (the ones that block)."
+  sarif-file:
+    description: "Absolute path to the generated SARIF file (depenemy.sarif in workspace root)."
 
 runs:
   using: docker
   image: Dockerfile
-  args:
-    - ${{ inputs.lockfile }}
-    - ${{ inputs.manifest }}
-    - ${{ inputs.approved-registries }}
-    - ${{ inputs.internal-scopes }}
-    - ${{ inputs.no-fail }}
-    - ${{ inputs.semver-lint }}
+  env:
+    INPUT_APPROVED_REGISTRIES: ${{ inputs.approved-registries }}
+    INPUT_FAIL_ON: ${{ inputs.fail-on }}
+    INPUT_PATHS: ${{ inputs.paths }}
+    INPUT_CONFIG: ${{ inputs.config }}
+    INPUT_GITHUB_TOKEN: ${{ inputs.token }}
+    INPUT_NO_FAIL: ${{ inputs.no-fail }}
