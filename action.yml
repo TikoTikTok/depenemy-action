@@ -1,0 +1,64 @@
+name: "depenemy — npm Supply Chain Scanner"
+description: >
+  Scans npm lockfiles and package.json for supply chain attacks:
+  registry hijacking, scope confusion, lockfile injection, semver abuse,
+  and more. Integrates as a PR check with BLOCK/ALERT/PASS findings.
+author: "depenemy"
+
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  lockfile:
+    description: "Path to package-lock.json"
+    required: false
+    default: "package-lock.json"
+
+  manifest:
+    description: "Path to package.json (for semver-lint)"
+    required: false
+    default: "package.json"
+
+  approved-registries:
+    description: >
+      JSON array of approved registry hostnames.
+      Example: '["registry.npmjs.org"]'
+    required: false
+    default: '["registry.npmjs.org"]'
+
+  internal-scopes:
+    description: >
+      JSON array of internal npm scopes that must NOT resolve from public registries.
+      Example: '["@myorg", "@myorg-internal"]'
+    required: false
+    default: "[]"
+
+  no-fail:
+    description: "Set to 'true' to always exit 0 (report-only mode, never blocks PR)"
+    required: false
+    default: "false"
+
+  semver-lint:
+    description: "Set to 'false' to skip semver-lint check"
+    required: false
+    default: "true"
+
+outputs:
+  blocks:
+    description: "Number of BLOCK-level findings"
+  alerts:
+    description: "Number of ALERT-level findings"
+  result:
+    description: "Overall result: PASS | ALERT | BLOCK"
+
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - ${{ inputs.lockfile }}
+    - ${{ inputs.manifest }}
+    - ${{ inputs.approved-registries }}
+    - ${{ inputs.internal-scopes }}
+    - ${{ inputs.no-fail }}
+    - ${{ inputs.semver-lint }}

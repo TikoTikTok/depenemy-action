@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="depenemy"
+LABEL org.opencontainers.image.description="npm supply chain security scanner"
+LABEL org.opencontainers.image.source="https://github.com/TikoTikTok/depenemy-action"
+LABEL org.opencontainers.image.licenses="MIT"
+
+# Install git (needed for depenemy install + lockfile git-diff)
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
+# Install depenemy engine
+RUN pip install --no-cache-dir git+https://github.com/TikoTikTok/depenemy.git@main
+
+# Copy scanner scripts
+COPY scripts/ /scripts/
+
+ENTRYPOINT ["/scripts/entrypoint.sh"]
