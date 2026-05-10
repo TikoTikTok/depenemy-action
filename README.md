@@ -1,109 +1,166 @@
-# depenemy — npm Supply Chain Scanner
+# depenemy Supply Chain Scanner
 
-[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-depenemy-blue?logo=github)](https://github.com/marketplace/actions/depenemy-npm-supply-chain-scanner)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+> **GitHub Action** · Scans npm dependencies for supply chain attacks using the [depenemy](https://github.com/TikoTikTok/depenemy) engine.
 
-> Detect npm supply chain attacks before they merge. Integrates in one step.
-
-**depenemy** scans your `package-lock.json` and `package.json` on every PR for:
-
-| Check | Rule | Severity |
-|-------|------|----------|
-| Package from unapproved registry | B-8 | 🚫 BLOCK |
-| Internal scope resolved from public registry | B-5 | 🚫 BLOCK |
-| Lockfile integrity field tampered | B-10 | 🚫 BLOCK |
-| Unsafe SemVer specifiers (`^`, `~`, `*`, `latest`) | A-1 | ⚠️ ALERT |
-| Package gained install script | A-15 | ⚠️ ALERT |
-| Suspicious publisher metadata | S-* | ⚠️ ALERT |
+[![GitHub Marketplace](https://img.shields.io/badge/Marketplace-depenemy-blue?logo=github)](https://github.com/marketplace/actions/depenemy-supply-chain-scanner)
 
 ---
 
-## Usage
+## What it checks
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| **B001** | warning | Unsafe SemVer specifier (`^`, `~`, `*`, `latest`) in `package.json` |
+| **B002** | error | Completely unpinned version (wildcard `*` / `latest` in lockfile) |
+| **B005** | error | Lockfile integrity hash mismatch (tampered package) |
+| **B006** | error | Package resolved from a non-approved registry |
+| **B007** | error | Lockfile injection via non-registry protocol (`file:`, `git+`, `http:`) |
+| **R007** | error | Known CVE in the resolved version (via OSV) |
+| **R009** | warning | Suspected typosquatting (edit-distance ≤ 1 from popular packages) |
+| **R010** | error | Version published very recently (active attack window) |
+| **S001** | error | Package has `preinstall`/`postinstall` scripts (arbitrary code on install) |
+| **S004** | warning | Dependency confusion risk (internal-looking scope on public registry) |
+| **S005** | error | Package flagged as malicious in OSV or public advisories |
+| **S007** | warning | Ghost repository (claimed source repo has no real activity) |
+| **S008** | warning | Publisher bulk-published many packages in a short window |
+| **S009** | warning | Publisher npm identity has no matching GitHub account |
+| **C001** | error | Composite score: 4+ independent risk signals → confirmed attacker pattern |
+
+All findings are emitted as **SARIF** and appear in the GitHub **Security → Code Scanning** tab.
+
+---
+
+## Quick start
 
 ```yaml
 # .github/workflows/supply-chain.yml
 name: Supply Chain Security
-
 on:
   pull_request:
-    paths:
-      - 'package-lock.json'
-      - 'package.json'
+    paths: ["package.json", "package-lock.json"]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
-  scan:
+  depenemy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: TikoTikTok/depenemy-action@v1
         with:
-          lockfile: package-lock.json
-          manifest: package.json
-          approved-registries: '["registry.npmjs.org"]'
-          internal-scopes: '["@myorg"]'
+          fetch-depth: 0
+
+      - name: Run depenemy
+        id: scan
+        uses: TikoTikTok/depenemy-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif-file }}
+          category: depenemy
 ```
 
-### Inputs
+---
 
-| Input | Description | Default |
-|-------|-------------|---------|
-| `lockfile` | Path to `package-lock.json` | `package-lock.json` |
-| `manifest` | Path to `package.json` | `package.json` |
-| `approved-registries` | JSON array of allowed registry hostnames | `["registry.npmjs.org"]` |
-| `internal-scopes` | JSON array of scopes that must NOT resolve from public registries | `[]` |
-| `no-fail` | `true` = report-only, never blocks PR | `false` |
-| `semver-lint` | `false` = skip semver check | `true` |
+## Inputs
 
-### Outputs
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `approved-registries` | No | `registry.npmjs.org` | Comma-separated list of approved registry hostnames. Packages resolved from any other host are **blocked** (B006). |
+| `fail-on` | No | `error` | Minimum severity that fails the job: `error` \| `warning` \| `info` \| `never` |
+| `paths` | No | `.` | Space-separated paths to scan |
+| `config` | No | — | Path to a `.depenemy.yml` file (overrides `approved-registries`) |
+| `token` | No | `${{ github.token }}` | GitHub token for author/publisher reputation lookups |
+| `no-fail` | No | `false` | **Deprecated** — use `fail-on: never` instead |
+
+## Outputs
 
 | Output | Description |
 |--------|-------------|
-| `result` | `PASS` / `ALERT` / `BLOCK` |
-| `blocks` | Number of BLOCK-level findings |
-| `alerts` | Number of ALERT-level findings |
+| `findings-count` | Total findings across all severity levels |
+| `errors-count` | Error-severity findings (the ones that block) |
+| `sarif-file` | Absolute path to `depenemy.sarif` in the workspace |
 
-### Use the result in later steps
+---
+
+## Advanced: private registries
 
 ```yaml
-      - uses: TikoTikTok/depenemy-action@v1
-        id: scan
-        with:
-          approved-registries: '["registry.npmjs.org"]'
-
-      - name: Post comment on BLOCK
-        if: steps.scan.outputs.result == 'BLOCK'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '🚫 **depenemy blocked this PR** — supply chain issue detected. See the Actions summary for details.'
-            })
+- uses: TikoTikTok/depenemy-action@v1
+  with:
+    approved-registries: "registry.npmjs.org,npm.mycompany.internal"
+    fail-on: error
 ```
 
-### Report-only mode (ALERTs, never blocks)
+## Advanced: custom rule config
+
+Create `.depenemy.yml` in your repository root:
 
 ```yaml
-      - uses: TikoTikTok/depenemy-action@v1
-        with:
-          no-fail: 'true'
+approved_registries:
+  - registry.npmjs.org
+  - npm.mycompany.internal
+
+rules:
+  B001: warning   # range specifier is warning (not error)
+  B006: error     # bad registry always blocks
+  S005: error     # known malicious always blocks
+
+thresholds:
+  min_author_account_age_days: 180
+  composite_score_threshold: 3   # tighten composite score
+```
+
+Then reference it in the action:
+
+```yaml
+- uses: TikoTikTok/depenemy-action@v1
+  with:
+    config: .depenemy.yml
+```
+
+## Report-only mode (never block PRs)
+
+```yaml
+- uses: TikoTikTok/depenemy-action@v1
+  with:
+    fail-on: never   # findings still appear in Code Scanning, job always passes
 ```
 
 ---
 
-## How it works
+## Architecture
 
-depenemy runs inside a Docker container — no dependencies needed on your runner.
+This action is a **thin Docker wrapper** around the [depenemy](https://github.com/TikoTikTok/depenemy) Python engine:
 
-1. **Semver Lint** — scans `package.json` for range specifiers that allow silent dependency drift
-2. **Lockfile Diff** — parses `package-lock.json` and checks every resolved URL against your approved registry list; flags internal scopes resolving from public CDNs; detects tampered integrity hashes
+```
+depenemy-action (Docker)
+  └── entrypoint.sh
+        ├── gen-config.py  →  generates .depenemy-action.yml from inputs
+        └── depenemy scan  →  parses manifests, fetches metadata, runs rules
+              ├── NpmParser  (reads package.json + package-lock.json)
+              ├── B001–B007  (behavioral rules)
+              ├── R001–R010  (reputation rules)
+              ├── S001–S009  (supply chain rules)
+              └── SARIF reporter  (writes depenemy.sarif)
+```
 
-BLOCK findings exit 1 (blocks the PR). ALERT findings are informational.
+The Docker image installs depenemy from the fork at build time, ensuring full rule coverage including supply chain checks not yet merged upstream.
 
 ---
+
+## Contributing / PR to upstream
+
+The supply chain rules in this action (B006, B007, S004–S009, C001) are implemented in
+[TikoTikTok/depenemy](https://github.com/TikoTikTok/depenemy) and are candidates for
+upstream contribution. See the fork's `CONTRIBUTING.md` for details on how to propose rules.
 
 ## License
 
