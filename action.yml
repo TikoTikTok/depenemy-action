@@ -8,9 +8,9 @@ branding:
 
 inputs:
   token:
-    description: GitHub token for author and contributor lookups (optional - unlocks R001 and R006 checks)
+    description: GitHub token for author and contributor lookups
     required: false
-    default: ${{ github.token }}
+    default: ""
   paths:
     description: "Space-separated paths to scan (default: repository root)"
     required: false
@@ -28,21 +28,34 @@ inputs:
     required: false
     default: ""
   ecosystems:
-    description: Comma-separated list of ecosystems to scan (npm,pypi,cargo) - default is auto-detect
+    description: Comma-separated list of ecosystems to scan (npm,pypi,cargo) — default is auto-detect
     required: false
     default: ""
   upload-sarif:
-    description: Automatically upload SARIF to GitHub Code Scanning
+    description: >
+      Automatically upload SARIF to GitHub Code Scanning.
+      Requires GitHub Advanced Security (GHAS) to be enabled on the repository.
+      Set to 'false' if you want to handle the upload yourself or if GHAS is not available.
     required: false
-    default: "true"
+    default: "false"
+  approved-registries:
+    description: >
+      Comma-separated list of approved npm registry hostnames.
+      Packages resolved from any other host trigger a BLOCK finding (B006).
+      Only applied when no custom config file is provided.
+    required: false
+    default: "registry.npmjs.org"
 
 outputs:
   sarif-file:
     description: Path to the generated SARIF file
+    value: ${{ steps.emit-outputs.outputs.sarif-file }}
   findings-count:
     description: Total number of findings
+    value: ${{ steps.scan.outputs.findings-count }}
   errors-count:
     description: Number of error-level findings
+    value: ${{ steps.scan.outputs.errors-count }}
 
 runs:
   using: composite
@@ -56,10 +69,34 @@ runs:
       shell: bash
       run: pip install depenemy
 
+    - name: Generate registry config
+      if: inputs.config == '' && inputs.approved-registries != ''
+      shell: python
+      env:
+        INPUT_APPROVED_REGISTRIES: ${{ inputs.approved-registries }}
+        WORKSPACE: ${{ github.workspace }}
+      run: |
+        import json, os
+        raw = os.environ.get("INPUT_APPROVED_REGISTRIES", "registry.npmjs.org").strip()
+        if raw.startswith("["):
+            try:
+                registries = json.loads(raw)
+            except Exception:
+                registries = [r.strip() for r in raw.split(",") if r.strip()]
+        else:
+            registries = [r.strip() for r in raw.split(",") if r.strip()]
+        cfg_path = os.path.join(os.environ["WORKSPACE"], ".depenemy-action.yml")
+        with open(cfg_path, "w") as f:
+            f.write("approved_registries:\n")
+            for reg in registries:
+                f.write(f"  - {reg}\n")
+        print(f"Generated {cfg_path} with registries: {registries}")
+
     - name: Run depenemy scan
+      id: scan
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ inputs.token }}
+        GITHUB_TOKEN: ${{ inputs.token || github.token }}
       run: |
         ARGS="${{ inputs.paths }}"
         ARGS="$ARGS --output sarif --output-file ${{ inputs.output-sarif }}"
@@ -67,15 +104,25 @@ runs:
 
         if [ -n "${{ inputs.config }}" ]; then
           ARGS="$ARGS --config ${{ inputs.config }}"
+        elif [ -f "${{ github.workspace }}/.depenemy-action.yml" ]; then
+          ARGS="$ARGS --config ${{ github.workspace }}/.depenemy-action.yml"
         fi
+
         if [ -n "${{ inputs.ecosystems }}" ]; then
           ARGS="$ARGS --ecosystem ${{ inputs.ecosystems }}"
         fi
 
         depenemy scan $ARGS
 
+    - name: Emit sarif-file output
+      id: emit-outputs
+      if: always()
+      shell: bash
+      run: |
+        echo "sarif-file=${{ inputs.output-sarif }}" >> "$GITHUB_OUTPUT"
+
     - name: Upload SARIF to GitHub Code Scanning
-      if: inputs.upload-sarif == 'true' && always()
+      if: ${{ inputs.upload-sarif == 'true' }}
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ inputs.output-sarif }}
